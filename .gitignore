@@ -2,6 +2,7 @@
 source/__pycache__/
 testpit/
 .vscode/
+testpit.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,54 +1,56 @@
 '''
-qpdmath represents the base calculations for the quantile paramaterized 
-distributions (qpd). The math for the Johnson system qpd's are based on the 
-phd dissertation work by Christopher Hadlock (2017). 
+Base calculations for quantile paramaterized distributions (qpd).
+
+The math for the Johnson system qpd's are based on the phd dissertation work by Christopher Hadlock (2017). 
  
 References:
 - [1] Hadlock, C.C., J.E. Bickel. 2017. Johnson Quantile-Parameterized 
     Distributions. Decision Analysis 14(1) 35-64.
 - [2] Hadlock, C.C. 2017. Quantile-Parameterized Methods for Quantifying 
     Uncertainty in Decision Analysis. Ph.D. dissertation, University of Texas.
-
-MIT License
-
-Copyright (c) 2023 Seth M. Nelson
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 '''
+# MIT License
+
+# Copyright (c) 2023 Seth M. Nelson
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 
 __author__ = ('Seth M. Nelson <github.com/nelsonseth>')
 
 __all__ = [
-    '_ncdf',
-    '_npdf',
-    '_nppf',
-    'QPD',
     'JQPDBounded',
     'JQPDSemiBounded',
 ]
 
 # imports
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Union
+from builtins import Exception
+
 import numpy as np
 from numpy import sqrt, exp, log, arccosh, sinh, arcsinh, sign, cosh
 import scipy.stats as stat
 from numpy.typing import ArrayLike
-from abc import ABC, abstractmethod
+
 
 # Normal unit functions used to build below calculations.
 # Unit normal cdf.
@@ -84,13 +86,88 @@ def _nppf(q: ArrayLike) -> ArrayLike:
     '''
     return stat.norm.ppf(q)
 
+
+class InputError(Exception):
+    '''Error on user inputs.'''
+
+@dataclass
+class _BaseInputs:
+
+    '''Dataclass for QPD core inputs.
+    
+    Provides routine logic checks of core inputs while QPD subclasses are active.
+    '''
+    x: list
+    q: list
+    bounds: list
+
+    # auto check inputs after first initialization.
+    # active instances will need to call check_args() if needed.
+    def __post_init__(self):
+        self.check_args()
+
+    def check_args(
+            self,
+            new_x: Union[list, None] = None,
+            new_q: Union[list, None] = None,
+            new_bounds: Union[list, None] = None,
+            ):
+        
+        # allows for check of new inputs without updating the current self._ just yet
+        if new_x:
+            _x = new_x
+        else:
+            _x = self.x
+
+        if new_q:
+            _q = new_q
+        else:
+            _q = self.q
+
+        if new_bounds:
+            _bounds = new_bounds
+        else:
+            _bounds = self.bounds
+
+        # x must be strictly increasing
+        if not all(a < b for a,b in zip(_x, _x[1:])):
+            raise InputError('x values must be strictly increasing.')
+        
+        # q must be strictly increasing
+        if not all(a < b for a,b in zip(_q, _q[1:])):
+            raise InputError('q values must be strictly increasing.')
+        
+        # q must be between 0 and 1
+        if _q[0] <= 0 or _q[-1] >= 1:
+            raise InputError('q values must be between 0 and 1.')
+
+        if len(_x) != len(_q):
+            raise InputError('Different length of inputs for x and q.')
+
+        if _bounds[0] >= _x[0]:
+            raise InputError('Lower bound must be less than all x.')
+        
+        # upper bound could be None
+        if _bounds[1]:
+            if _bounds[1] <= _x[-1]:
+                raise InputError('Upper bound must be greater than all x.')
+
+        return True
+    
+
 # Quantile Paramaterized Distribution abstract base class. 
 # Forces inclusion of cdf, pdf, ppf for subsequent qpd versions.
-# Probably not necessary for it to be abstract ... but it works for now and it 
-# seemed cool.
-class QPD(ABC):
+class _QPD(ABC):
     '''Parent class for Quantile Parameterized Distribution functions.'''
     
+    def __init__(
+            self,
+            x: list,
+            q: list,
+            bounds: list)-> None:
+        
+        self._base = _BaseInputs(x, q, bounds)
+
     @abstractmethod
     def cdf(self, x: ArrayLike) -> ArrayLike:
         '''
@@ -146,11 +223,45 @@ class QPD(ABC):
         '''
         # universal input checking
         if np.any(q < 0) or np.any(q > 1):
-            raise ValueError(f'*.ppf quantile input must be between 0 and 1.')
+            raise InputError(f'*.ppf quantile input must be between 0 and 1.')
         
         pass
 
-class JQPDBounded(QPD):
+    @property
+    def x_base(self):
+        return self._base.x
+    
+    @x_base.setter
+    def x_base(self, value:list):
+        # check input first
+        self._base.check_args(new_x=value)
+        # if good, then change
+        self._base.x = value
+        
+    @property
+    def q_base(self):
+        return self._base.q
+    
+    @q_base.setter
+    def q_base(self, value:list):
+        # check input first
+        self._base.check_args(new_q=value)
+        # if good, then change
+        self._base.q = value
+        
+    @property
+    def bounds(self):
+        return self._base.bounds
+    
+    @bounds.setter
+    def bounds(self, value:list):
+        # check input first
+        self._base.check_args(new_bounds=value)
+        # if good, then change
+        self._base.bounds = value
+
+
+class JQPDBounded(_QPD):
     '''Johnson QPD - Bounded Class
 
     Quantile parameterized distribution using the Johnson SU distribution as a
@@ -182,7 +293,7 @@ class JQPDBounded(QPD):
 
     Returns
     -------
-    Instantiated JQPD_Bounded class object.
+    Instantiated JQPDBounded class object.
 
     Notes
     -----
@@ -208,6 +319,14 @@ class JQPDBounded(QPD):
         upper: float = 1.0 # upper bound
     ) -> None:
         
+        super().__init__(
+            [xlow, x50, xhigh],
+            [alpha, 0.5, 1-alpha],
+            [lower, upper])
+
+        self._alpha = alpha
+
+
         self._arg_check(xlow, x50, xhigh, alpha, lower, upper)
 
         self.xlow = xlow
@@ -216,6 +335,16 @@ class JQPDBounded(QPD):
         self.alpha = alpha
         self.lower = lower
         self.upper = upper
+
+
+    @property
+    def alpha(self):
+        return self._alpha
+    
+    @alpha.setter
+    def alpha(self, value):
+        self.q_base = [value, 0.5, 1-value]
+        self._alpha = value
 
     # input arg checker. made it a separate method to be called always in case
     # the user changed an attribute.
@@ -369,7 +498,7 @@ class JQPDBounded(QPD):
             pdf_out = pdf_out / pdf_out.sum()
         return pdf_out
 
-class JQPDSemiBounded(QPD):
+class JQPDSemiBounded(_QPD):
     '''Johnson QPD - Semi-Bounded Class
 
     Quantile parameterized distribution using the Johnson SU distribution as a
@@ -398,7 +527,7 @@ class JQPDSemiBounded(QPD):
 
     Returns
     -------
-    Instantiated JQPD_SemiBounded class object.
+    Instantiated JQPDSemiBounded class object.
 
     Notes
     -----
