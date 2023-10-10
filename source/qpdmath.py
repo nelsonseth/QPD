@@ -1,7 +1,8 @@
 '''
 Base calculations for quantile paramaterized distributions (qpd).
 
-The math for the Johnson system qpd's are based on the phd dissertation work by Christopher Hadlock (2017). 
+The math for the Johnson system qpd's are based on the phd dissertation work 
+by Christopher Hadlock (2017). 
  
 References:
 - [1] Hadlock, C.C., J.E. Bickel. 2017. Johnson Quantile-Parameterized 
@@ -51,6 +52,8 @@ from numpy import sqrt, exp, log, arccosh, sinh, arcsinh, sign, cosh
 import scipy.stats as stat
 from numpy.typing import ArrayLike
 
+_default_size = 200
+_default_wiggle = 10**-10
 
 # Normal unit functions used to build below calculations.
 # Unit normal cdf.
@@ -93,13 +96,13 @@ class InputError(Exception):
 @dataclass
 class _BaseInputs:
 
-    '''Dataclass for QPD core inputs.
+    '''Dataclass for _QPD core inputs.
     
-    Provides routine logic checks of core inputs while QPD subclasses are active.
+    Provides routine logic checks of core inputs while _QPD subclasses are active.
     '''
-    x: list
-    q: list
-    bounds: list
+    x: list[float]
+    q: list[float]
+    bounds: list[float, None]
 
     # auto check inputs after first initialization.
     # active instances will need to call check_args() if needed.
@@ -113,7 +116,7 @@ class _BaseInputs:
             new_bounds: Union[list, None] = None,
             ):
         
-        # allows for check of new inputs without updating the current self._ just yet
+        # allows for check of new inputs without updating the current self._* just yet
         if new_x:
             _x = new_x
         else:
@@ -138,6 +141,7 @@ class _BaseInputs:
             raise InputError('q values must be strictly increasing.')
         
         # q must be between 0 and 1
+        # TODO: 0,1 inclusive vs exclusive
         if _q[0] <= 0 or _q[-1] >= 1:
             raise InputError('q values must be between 0 and 1.')
 
@@ -168,64 +172,6 @@ class _QPD(ABC):
         
         self._base = _BaseInputs(x, q, bounds)
 
-    @abstractmethod
-    def cdf(self, x: ArrayLike) -> ArrayLike:
-        '''
-        Cumulative density function at 'x' of the given distribution.
-    
-        Parameters
-        ----------
-        x : array_like
-            Quantiles
-        
-        Returns
-        -------
-        cdf : array_like
-            Cumulative density function evaluated at 'x'.
-        '''
-        pass
-
-    @abstractmethod
-    def pdf(self, x: ArrayLike, normalized: bool=False) -> ArrayLike:
-        '''
-        Probability density function at 'x' of the given distribution.
-    
-        Parameters
-        ----------
-        x : array_like
-            Quantiles
-        normalized: bool, optional
-            Normalization choice. If false (default), returns un-normalized pdf.
-            If true, returns normalized pdf (ie. integral = 1).
-
-        Returns
-        -------
-        pdf : array_like
-            Probability density function evaluated at 'x'.
-        '''
-        pass
-
-    @abstractmethod
-    def ppf(self, q: ArrayLike) -> ArrayLike:
-        '''
-        Percent point function (inverse of cdf) at 'q' of the given distribution. 
-        Also called the quantile function.
-
-        Parameters
-        ----------
-        q : array_like
-            Lower tail probability
-        
-        Returns
-        -------
-        x : array_like
-            Quantile corresponding to the lower tail probability 'q'.
-        '''
-        # universal input checking
-        if np.any(q < 0) or np.any(q > 1):
-            raise InputError(f'*.ppf quantile input must be between 0 and 1.')
-        
-        pass
 
     @property
     def x_base(self):
@@ -261,34 +207,115 @@ class _QPD(ABC):
         self._base.bounds = value
 
 
+    @abstractmethod
+    def cdf(*args, **kwargs):
+        '''
+        Cumulative density function at ``x`` of the given distribution.
+    
+        Parameters
+        ----------
+        ``x``: array_like, float, Optional
+            Quantiles for the given range. If not specified, cdf is computed for number
+            of quantiles specified in ``size`` across the bounds range.
+
+        ``size``: int, Optional
+            Size of array to be calculated. If ``x`` is specified, size is ignored.
+            Default = 200.
+        
+        Returns
+        -------
+        cdf : array_like, float
+            Cumulative density function evaluated at ``x``.
+        '''
+        pass
+
+    @abstractmethod
+    def pdf(*args, **kwargs):
+        '''
+        Probability density function at ``x`` of the given distribution.
+    
+        Parameters
+        ----------
+        ``x``: array_like, float, Optional
+            Quantiles for the given range. If not specified, pdf is computed for number
+            of quantiles specified in ``size`` across the bounds range.
+
+        ``size``: int, Optional
+            Size of array to be calculated. If ``x`` is specified, size is ignored.
+            Default = 200.
+
+        ``normalized``: bool, optional
+            Normalization choice. If false (default), returns un-normalized pdf.
+            If true, returns normalized pdf (ie. integral = 1).
+
+        Returns
+        -------
+        pdf : array_like, float
+            Probability density function evaluated at ``x``.
+        '''
+        pass
+
+    @abstractmethod
+    def ppf(*args, **kwargs):
+        '''
+        Percent point function (inverse of cdf) at ``q`` of the given distribution. 
+        Also called the quantile function.
+
+        Parameters
+        ----------
+        ``q``: array_like, float
+            Lower tail probability. Must be in the range 0 to 1.
+        
+        Returns
+        -------
+        x: array_like, float
+            Quantile corresponding to the lower tail probability ``q``.
+        '''
+        pass
+
+    def __repr__(self):
+        
+        msg = f'''
+        QPD Instance with basis:
+
+        Quantile  Probability
+            {self._base.x[0]},      {self._base.q[0]}
+            {self._base.x[1]},      {self._base.q[1]}
+            {self._base.x[2]},      {self._base.q[2]}
+
+        Bounds: {self._base.bounds[0]} to {self._base.bounds[1]}
+        '''
+
+        return msg
+
 class JQPDBounded(_QPD):
     '''Johnson QPD - Bounded Class
 
     Quantile parameterized distribution using the Johnson SU distribution as a
     basis for construction. The JQPDBounded distribution has finite lower and 
-    upper support bounds, [lower, upper], and is parameterized by any 
+    upper support bounds, [``lower``, ``upper``], and is parameterized by any 
     compatible symmetric quantile triplet.
 
     Parameters
     ----------
-    xlow: float
-        Value for the lower symmetric quantile, q(alpha). 
+    ``xlow``: float
+        Value for the lower symmetric quantile, q(``alpha``). 
 
-    x50: float
+    ``x50``: float
         Value for the base quantile, q(0.5).
 
-    xhigh: float
-        Value for the higher symmetric quantile, q(1 - alpha).
+    ``xhigh``: float
+        Value for the higher symmetric quantile, q(1 - ``alpha``).
 
-    alpha: float, optional
+    ``alpha``: float, optional
         Quantile parameter element of (0, 0.5), exclusive. Defines the symmetry about the 
-            base quantile. For example, alpha = 0.1 --> (xlow, x50, xhigh) correspond to 
-            quantiles of (0.1, 0.5, 0.9), respectively. (Default = 0.1).
+            base quantile. For example, ``alpha`` = 0.1 --> (``xlow``, ``x50``, ``xhigh``) 
+            correspond to quantiles of (0.1, 0.5, 0.9), respectively. (Default = 0.1).
 
-    lower: float, optional
+    ``lower``: float, optional
         Value for lower support bound. (Default = 0).
 
-    upper: float, optional
+    ``upper``: float, optional
         Value for upper support bound. (Default = 1).
 
     Returns
@@ -298,8 +325,8 @@ class JQPDBounded(_QPD):
     Notes
     -----
     - A quantile triplet is compatible if and only if:
-        lower < xlow < x50 < xhigh < upper
-    - alpha must be within the bounds 0 < alpha < 0.5
+        ``lower`` < ``xlow`` < ``x50`` < ``xhigh`` < ``upper``
+    - ``alpha`` must be within the bounds 0 < ``alpha`` < 0.5
 
     References
     ----------
@@ -319,6 +346,11 @@ class JQPDBounded(_QPD):
         upper: float = 1.0 # upper bound
     ) -> None:
         
+        # check alpha input before having to check everything else.
+        if alpha <= 0 or alpha >= 0.5:
+            raise InputError(f'alpha must be in the range (0, 0.5)')
+
+        # defines self._base and checks inputs
         super().__init__(
             [xlow, x50, xhigh],
             [alpha, 0.5, 1-alpha],
@@ -326,46 +358,26 @@ class JQPDBounded(_QPD):
 
         self._alpha = alpha
 
-
-        self._arg_check(xlow, x50, xhigh, alpha, lower, upper)
-
-        self.xlow = xlow
-        self.x50 = x50
-        self.xhigh = xhigh
-        self.alpha = alpha
-        self.lower = lower
-        self.upper = upper
-
-
     @property
     def alpha(self):
         return self._alpha
     
     @alpha.setter
     def alpha(self, value):
+
+        if value <= 0 or value >= 0.5:
+            raise InputError(f'alpha must be in the range (0, 0.5)')
+
         self.q_base = [value, 0.5, 1-value]
         self._alpha = value
 
-    # input arg checker. made it a separate method to be called always in case
-    # the user changed an attribute.
-    @staticmethod
-    def _arg_check(xlow, x50, xhigh, alpha, lower, upper):
-        '''Internal argument verification.'''
-        # compatible order of inputs
-        order = [lower, xlow, x50, xhigh, upper]
-        # check compatible order
-        if not all(x < y for x,y in zip(order, order[1:])):
-            raise ValueError(f'Bounds and quantile inputs must satisfy a value order of:\n \
-                [ lower < xlow < x50 < xhigh < upper ]. Current values are:\n \
-                [ {lower} < {xlow} < {x50} < {xhigh} < {upper} ]')
-        # check range of alpha
-        if alpha <= 0 or alpha >= 0.5:
-            raise ValueError(f'alpha must be in the range (0, 0.5)')
 
-    def _get_calc_args(self, xlow, x50, xhigh, alpha, lower, upper):
+    def _get_calc_args(self):
         '''Internal argument calcs.'''
-        # Parameter checks
-        self._arg_check(xlow, x50, xhigh, alpha, lower, upper)
+        # Grab current base values
+        xlow, x50, xhigh = self._base.x
+        lower, upper = self._base.bounds
+        alpha = self._alpha
 
         # Starting from the JSU quantile function, we have to solve for the
         # parameters xi, lambda, delta, and gamma.
@@ -404,53 +416,59 @@ class JQPDBounded(_QPD):
         # Package the necessary parameters into a tuple to use later. This 
         # just allows me to still access them without having to write self
         # a bunch of times in each method.
-        return (lower, upper, c, lf, mf, hf, n, xi, delta, lam)
+        return (c, lf, mf, hf, n, xi, delta, lam)
 
-    def ppf(self, q: ArrayLike) -> ArrayLike:
+
+    def ppf(self, q: Union[ArrayLike, float]) -> Union[ArrayLike, float]:
         # Quantile function - JQPD-Bounded.
         # This is the result of an inverse-probit Q-transformation applied to
         # the Johnson SU quantile function. Additional shifting and scaling
         # applied with (lower, upper).
 
         # Method named 'ppf' to be consistent with Scipy terminology.
+        _q = np.asarray(q)
+
+        if np.any(_q) < 0 or np.any(_q) > 1:
+            raise InputError('Probability input must be in the range [0, 1]')
 
         # Unpackage internal args from tuple.
-        # This is so I don't have to write self a ton of times, but also
-        # allows for the user to change an input attribute without having
-        # to re-create an instance of the class. This means I need to
-        # re-calc the args in case something changed. 
-        lower, upper, c, lf, mf, hf, n, xi, delta, lam = self._get_calc_args(
-            self.xlow, self.x50, self.xhigh, self.alpha, self.lower, self.upper)
+        c, lf, mf, hf, n, xi, delta, lam = self._get_calc_args()
+
+        lower, upper = self._base.bounds
 
         if n == 0: # special exception when n = 0 -> delta = 0
-            out = lower + (upper - lower) * _ncdf(mf + ((hf - lf)/2*c) * _nppf(q))
+            out = lower + (upper - lower) * _ncdf(mf + ((hf - lf)/2*c) * _nppf(_q))
         else: # delta is > 0
             out = (lower + (upper - lower)
-                * _ncdf(xi + lam*sinh(delta * (_nppf(q) + n*c))))
+                * _ncdf(xi + lam*sinh(delta * (_nppf(_q) + n*c))))
         return out
 
-    def cdf(self, x: ArrayLike) -> ArrayLike:
+
+    def cdf(self,
+        x: Union[ArrayLike, float] = [],
+        size: int = _default_size,
+        ) -> Union[ArrayLike, float]:
         # Cumulative Density Function - JQPD - Bounded.
         # Direct inverse of quantile function (ppf).
 
-        # Handling divide by 0 and log(0) occurrences.
-        # TODO: address this with try: except: and relevant errors.
-        #   Currently a bit tricky with x as an array.
-        # If 'x' is equal to either the upper or lower bound, we get an instance
-        # of log(0), which numpy gives a divide by zero error for.
-        # To address this, we add a small amount to the value of x in that case.
+        lower, upper = self._base.bounds
+
         _x = np.asarray(x)
-        _x = np.where((_x == self.lower), _x + 10**-10, _x)
-        _x = np.where((_x == self.upper), _x - 10**-10, _x)
-    
+
+        if _x.size == 0: # no x input given
+            # create array with length 'size' exclusive to lower and upper by wiggle.
+            _x = np.linspace(lower + _default_wiggle, upper - _default_wiggle, size)
+        else:
+            # Handling divide by 0 and log(0) occurrences.
+            # If 'x' is equal to either the upper or lower bound, we get an instance
+            # of log(0), which numpy gives a divide by zero error for.
+            # To address this, we add a small amount to the value of x in that case.
+            _x = np.where((_x == lower), _x + _default_wiggle, _x)
+            _x = np.where((_x == upper), _x - _default_wiggle, _x)
+            
         # Unpackage internal args from tuple.
-        # This is so I don't have to write self a ton of times, but also
-        # allows for the user to change an input attribute without having
-        # to re-create an instance of the class. This means I need to
-        # re-calc the args in case something changed. 
-        lower, upper, c, lf, mf, hf, n, xi, delta, lam = self._get_calc_args(
-            self.xlow, self.x50, self.xhigh, self.alpha, self.lower, self.upper)
-    
+        c, lf, mf, hf, n, xi, delta, lam = self._get_calc_args()
+
         if n == 0: # special exception when n = 0 -> delta = 0
             out = _ncdf((2*c/(hf - lf)) * (_nppf((_x - lower)/(upper - lower)) - mf))
         else:
@@ -458,24 +476,32 @@ class JQPDBounded(_QPD):
                 * (_nppf((_x - lower) / (upper - lower)) - xi)) - n*c))
         return out
 
-    def pdf(self, x: ArrayLike, normalized: bool=False) -> ArrayLike:
+
+    def pdf(self,
+        x: Union[ArrayLike, float] = [],
+        size: int = _default_size,
+        normalized: bool=False,
+        ) -> Union[ArrayLike, float]:
         # Probability density function - JQPD-Bounded.
         # derivative of cdf; done by chain rule.
 
-        # handling divide by 0 and log(0) occurrences.
-        # TODO: address this with try: except: and relevant errors.
-        #   Currently a bit tricky with x as an array.
-        _x = np.asarray(x)
-        _x = np.where((_x == self.lower), _x + 10**-4, _x)
-        _x = np.where((_x == self.upper), _x - 10**-4, _x)
+        lower, upper = self._base.bounds
 
+        _x = np.asarray(x)
+
+        if _x.size == 0: # no x input given
+            # create array with length 'size' exclusive to lower and upper.
+            _x = np.linspace(lower + _default_wiggle, upper - _default_wiggle, size)
+        else:
+            # Handling divide by 0 and log(0) occurrences.
+            # If 'x' is equal to either the upper or lower bound, we get an instance
+            # of log(0), which numpy gives a divide by zero error for.
+            # To address this, we add a small amount to the value of x in that case.
+            _x = np.where((_x == lower), _x + _default_wiggle, _x)
+            _x = np.where((_x == upper), _x - _default_wiggle, _x)
+    
         # Unpackage internal args from tuple.
-        # This is so I don't have to write self a ton of times, but also
-        # allows for the user to change an input attribute without having
-        # to re-create an instance of the class. This means I need to
-        # re-calc the args in case something changed. 
-        lower, upper, c, lf, mf, hf, n, xi, delta, lam = self._get_calc_args(
-            self.xlow, self.x50, self.xhigh, self.alpha, self.lower, self.upper)
+        c, lf, mf, hf, n, xi, delta, lam = self._get_calc_args()
 
         # first two parts of chain rule
         part1 = 1 / (upper - lower)
@@ -494,35 +520,37 @@ class JQPDBounded(_QPD):
 
         # return combined derivative
         pdf_out = np.asarray(part1*part2*part3*part4)
-        if normalized == True: #normalize pdf
+        if normalized: #normalize pdf
             pdf_out = pdf_out / pdf_out.sum()
+
         return pdf_out
+
 
 class JQPDSemiBounded(_QPD):
     '''Johnson QPD - Semi-Bounded Class
 
     Quantile parameterized distribution using the Johnson SU distribution as a
     basis for construction. The JQPDSemiBounded distribution has a finite lower bound and 
-    infinite upper bound, [lower, infinity), and is parameterized by any compatible symmetric 
+    infinite upper bound, [``lower``, infinity), and is parameterized by any compatible symmetric 
     quantile triplet.
 
     Parameters
     ----------
-    xlow: float
-        Value for the lower symmetric quantile, q(alpha). 
+    ``xlow``: float
+        Value for the lower symmetric quantile, q(``alpha``). 
 
-    x50: float
+    ``x50``: float
         Value for the base quantile, q(0.5).
 
-    xhigh: float
-        Value for the higher symmetric quantile, q(1 - alpha).
+    ``xhigh``: float
+        Value for the higher symmetric quantile, q(1 - ``alpha``).
 
-    alpha: float, optional
+    ``alpha``: float, optional
         Quantile parameter element of (0, 0.5), exclusive. Defines the symmetry about the 
-        base quantile. For example, alpha = 0.1 --> (xlow, x50, xhigh) correspond to quantiles 
-        of (0.1, 0.5, 0.9), respectively. (Default = 0.1).
+        base quantile. For example, ``alpha`` = 0.1 --> (``xlow``, ``x50``, ``xhigh``) 
+        correspond to quantiles of (0.1, 0.5, 0.9), respectively. (Default = 0.1).
 
-    lower: float, optional
+    ``lower``: float, optional
         Value for lower support bound. (Default = 0).
 
     Returns
@@ -532,8 +560,8 @@ class JQPDSemiBounded(_QPD):
     Notes
     -----
     - A quantile triplet is compatible if and only if:
-        lower < xlow < x50 < xhigh
-    - alpha must be within the bounds 0 < alpha < 0.5
+        ``lower`` < ``xlow`` < ``x50`` < ``xhigh``
+    - ``alpha`` must be within the bounds 0 < ``alpha`` < 0.5
 
     References
     ----------
@@ -552,34 +580,39 @@ class JQPDSemiBounded(_QPD):
         lower: float = 0.0, # lower bound
     ) -> None:
 
-        self._arg_check(xlow, x50, xhigh, alpha, lower)
-
-        self.xlow = xlow
-        self.x50 = x50
-        self.xhigh = xhigh
-        self.alpha = alpha
-        self.lower = lower
-
-    # input arg checker. made it a separate method to be called always in case
-    # the user changed an attribute.
-    @staticmethod
-    def _arg_check(xlow, x50, xhigh, alpha, lower):
-        '''Internal argument verification.'''
-        # compatible order of inputs
-        order = [lower, xlow, x50, xhigh]
-        # check compatible order
-        if not all(x<y for x,y in zip(order, order[1:])):
-            raise ValueError(f'Bounds and quantile inputs must satisfy a value order of: \
-                \n[ lower < xlow < x50 < xhigh < ]. Current values are:\n [ {lower} < {xlow} < \
-                {x50} < {xhigh} ]')
-        # check range of alpha
+        # check alpha input before having to check everything else.
         if alpha <= 0 or alpha >= 0.5:
-            raise ValueError(f'alpha must be in the range (0, 0.5)')
+            raise InputError(f'alpha must be in the range (0, 0.5)')
 
-    def _get_calc_args(self, xlow, x50, xhigh, alpha, lower):
+        # defines self._base and checks inputs
+        super().__init__(
+            [xlow, x50, xhigh],
+            [alpha, 0.5, 1-alpha],
+            [lower, None])
+
+        self._alpha = alpha
+
+
+    @property
+    def alpha(self):
+        return self._alpha
+    
+    @alpha.setter
+    def alpha(self, value):
+
+        if value <= 0 or value >= 0.5:
+            raise InputError(f'alpha must be in the range (0, 0.5)')
+
+        self.q_base = [value, 0.5, 1-value]
+        self._alpha = value
+
+
+    def _get_calc_args(self):
         '''Internal argument calcs.'''
-        # parameter checks
-        self._arg_check(xlow, x50, xhigh, alpha, lower)
+        # Grab current base values
+        xlow, x50, xhigh = self._base.x
+        lower = self._base.bounds[0]
+        alpha = self._alpha
 
         # starting from the JSU quantile function, we have to solve for the
         # parameters xi, lambda, delta, and gamma.
@@ -620,9 +653,10 @@ class JQPDSemiBounded(_QPD):
         # package the necessary parameters into a tuple to use later. This 
         # just allows me to still access them without having to write self
         # a bunch of times in each method.
-        return (lower, x50, c, n, theta, delta, lam, s1)
+        return (c, n, theta, delta, lam, s1)
 
-    def ppf(self, q: ArrayLike) -> ArrayLike:
+
+    def ppf(self, q: Union[ArrayLike, float]) -> Union[ArrayLike, float]:
         # Quantile function - JQPD-Semi-Bounded.
         # This is the result of an exponential Q-transformation applied to
         # the Johnson SU quantile function. Additional shifting 
@@ -630,38 +664,54 @@ class JQPDSemiBounded(_QPD):
 
         # Method named 'ppf' to be consistent with Scipy terminology.
 
+        # quick check on q inputs
+        _q = np.asarray(q)
+
+        if np.any(_q) < 0 or np.any(_q) > 1:
+            raise InputError('Probability input must be in the range [0, 1].')
+
         # Unpackage internal args from tuple.
-        # This is so I don't have to write self a ton of times, but also
-        # allows for the user to change an input attribute without having
-        # to re-create an instance of the class. This means I need to
-        # re-calc the args in case something changed. 
-        lower, x50, c, n, theta, delta, lam, s1 = self._get_calc_args(
-            self.xlow, self.x50, self.xhigh, self.alpha, self.lower)
+        c, n, theta, delta, lam, s1 = self._get_calc_args()
+
+        lower = self._base.bounds[0]
+        x50 = self._base.x[1]
 
         if n == 0: # special exception when n = 0, delta = 0
-            out = lower + x50 * (s1**(-1 * _nppf(q) / c))
+            out = lower + x50 * (s1**(-1 * _nppf(_q) / c))
         else:
-            out = (lower + theta*exp(lam*sinh(arcsinh(delta*_nppf(q))
+            out = (lower + theta*exp(lam*sinh(arcsinh(delta*_nppf(_q))
                 + arcsinh(n*c*delta))))
+
         return out
 
-    def cdf(self, x: ArrayLike) -> ArrayLike:
+
+    def cdf(self,
+        x: Union[ArrayLike, float] = [],
+        size: int = _default_size,
+        ) -> Union[ArrayLike, float]:
         # Cumulative Density Function - JQPD - Semi-Bounded.
         # Direct inverse of quantile function (ppf).
 
-        # handling divide by 0 and log(0) occurrences
-        # TODO: address this with try: except: and relevant errors.
-        #   Currently a bit tricky with x as an array.
+        lower = self._base.bounds[0]
+
         _x = np.asarray(x)
-        _x = np.where(_x == self.lower, _x + 10**-10, _x)
+
+        if _x.size == 0: # no x input given
+            # create upper limit of twice ppf(0.999)
+            upper = self.ppf(0.999) * 2
+            # create array with length 'size' exclusive to lower.
+            _x = np.linspace(lower, upper, size+1)[1:]
+        else:
+            # Handling divide by 0 and log(0) occurrences.
+            # If 'x' is equal to lower bound, we get an instance
+            # of log(0), which numpy gives a divide by zero error for.
+            # To address this, we add a small amount to the value of x in that case.
+            _x = np.where((_x == lower), _x + _default_wiggle, _x)
 
         # Unpackage internal args from tuple.
-        # This is so I don't have to write self a ton of times, but also
-        # allows for the user to change an input attribute without having
-        # to re-create an instance of the class. This means I need to
-        # re-calc the args in case something changed. 
-        lower, x50, c, n, theta, delta, lam, s1 = self._get_calc_args(
-            self.xlow, self.x50, self.xhigh, self.alpha, self.lower)
+        c, n, theta, delta, lam, s1 = self._get_calc_args()
+            
+        x50 = self._base.x[1]
     
         s3 = log((_x - lower)/x50)
         s4 = log((_x - lower)/theta)
@@ -671,28 +721,39 @@ class JQPDSemiBounded(_QPD):
         else:
             out = (_ncdf((1/(lam*delta)) * (s4*sqrt((n*c*delta)**2 + 1)
                 - (n*c*delta)*sqrt(s4**2 + lam**2))))
+
         return out
 
-    def pdf(self, x: ArrayLike, normalized: bool=False) -> ArrayLike:
-        # Probability density function - JQPD-Semi-Bounded.
-        # derivative of cdf; done by chain rule? this was from Hadlock 
-        # dissertation. I couldn't quite follow his algebra; my deriviation
-        # is below in _pdf2 for comparison.
 
-        # handling divide by 0 and log(0) occurrences
-        # TODO: address this with try: except: and relevant errors.
-        #   Currently a bit tricky with x as an array.
+    def pdf(self,
+        x: Union[ArrayLike, float] = [],
+        size: int = _default_size,
+        normalized: bool=False,
+        ) -> Union[ArrayLike, float]:
+        # Cumulative Density Function - JQPD - Semi-Bounded.
+        # Direct inverse of quantile function (ppf).
+
+        lower = self._base.bounds[0]
+
         _x = np.asarray(x)
-        _x = np.where(_x == self.lower, _x + 10**-10, _x)
+
+        if _x.size == 0:
+            # create upper limit of twice ppf(0.999)
+            upper = self.ppf(0.999) * 2
+            # create array with length 'size' exclusive to lower.
+            _x = np.linspace(lower, upper, size+1)[1:]
+        else:
+            # Handling divide by 0 and log(0) occurrences.
+            # If 'x' is equal to lower bound, we get an instance
+            # of log(0), which numpy gives a divide by zero error for.
+            # To address this, we add a small amount to the value of x in that case.
+            _x = np.where((_x == lower), _x + _default_wiggle, _x)
 
         # Unpackage internal args from tuple.
-        # This is so I don't have to write self a ton of times, but also
-        # allows for the user to change an input attribute without having
-        # to re-create an instance of the class. This means I need to
-        # re-calc the args in case something changed. 
-        lower, x50, c, n, theta, delta, lam, s1 = self._get_calc_args(self.xlow, 
-            self.x50, self.xhigh, self.alpha, self.lower)
-
+        c, n, theta, delta, lam, s1 = self._get_calc_args()
+            
+        x50 = self._base.x[1]
+        
         s3 = log((_x - lower)/x50)
         s4 = log((_x - lower)/theta)
 
@@ -708,29 +769,40 @@ class JQPDSemiBounded(_QPD):
             out = part1*part2
 
         pdf_out = np.asarray(out)
+
         if normalized == True:
             pdf_out = pdf_out / pdf_out.sum()
+
         return pdf_out
 
-    def _pdf2(self, x: ArrayLike) -> ArrayLike:
-        # Probability density function - JQPD-Semi-Bounded.
-        # derivative of cdf; done by chain rule. My own attempt to derive what
-        # Hadlock did; It seems to match, mathematically.
+    def _pdf2(self,
+        x: Union[ArrayLike, float] = [],
+        size: int = _default_size,
+        normalized: bool=False,
+        ) -> Union[ArrayLike, float]:
+        # Cumulative Density Function - JQPD - Semi-Bounded.
+        # Direct inverse of quantile function (ppf).
 
-        # handling divide by 0 and log(0) occurrences
-        # TODO: address this with try: except: and relevant errors.
-        #   Currently a bit tricky with x as an array.
+        lower = self._base.bounds[0]
+
         _x = np.asarray(x)
-        _x = np.where(_x == self.lower, _x + 10**-10, _x)
+
+        if _x.size == 0:
+            # create upper limit of twice ppf(0.999)
+            upper = self.ppf(0.999) * 2
+            # create array with length 'size' exclusive to lower.
+            _x = np.linspace(lower, upper, size+1)[1:]
+        else:
+            # Handling divide by 0 and log(0) occurrences.
+            # If 'x' is equal to lower bound, we get an instance
+            # of log(0), which numpy gives a divide by zero error for.
+            # To address this, we add a small amount to the value of x in that case.
+            _x = np.where((_x == lower), _x + _default_wiggle, _x)
 
         # Unpackage internal args from tuple.
-        # This is so I don't have to write self a ton of times, but also
-        # allows for the user to change an input attribute without having
-        # to re-create an instance of the class. This means I need to
-        # re-calc the args in case something changed. 
-        lower, x50, c, n, theta, delta, lam, s1 = self._get_calc_args(self.xlow, 
-            self.x50, self.xhigh, self.alpha, self.lower)
-
+        c, n, theta, delta, lam, s1 = self._get_calc_args()
+            
+        x50 = self._base.x[1]
         s3 = log((_x - lower)/x50)
         s4 = log((_x - lower)/theta)
 
@@ -746,7 +818,15 @@ class JQPDSemiBounded(_QPD):
             part4 = 1/delta * cosh(arcsinh(1/lam*s4) - arcsinh(n*c*delta))
             part5 = _npdf(1/delta*sinh(arcsinh(1/lam*s4)-arcsinh(n*c*delta)))
             out = part1*part2*part3*part4*part5  
-        return out
+
+        pdf_out = np.asarray(out)
+
+        if normalized == True:
+            pdf_out = pdf_out / pdf_out.sum()
+
+        return pdf_out
+
+#-------------------------------------------------------------------------------
 
 if __name__ == '__main__':
 
@@ -755,40 +835,34 @@ if __name__ == '__main__':
     xlowB = stat.beta.ppf(0.1, 2, 4)
     x50B = stat.beta.ppf(0.5, 2, 4)
     xhighB = stat.beta.ppf(0.9, 2, 4)
-    lowerB = 0
-    upperB = 1
-    alphaB = 0.1
 
-    distB = JQPDBounded(xlowB, x50B, xhighB, alpha=alphaB, lower=lowerB, upper=upperB)
+    distB = JQPDBounded(xlowB, x50B, xhighB)
 
-    x = np.linspace(lowerB, upperB, 200)
-    yB_pdf = distB.pdf(x, normalized=True)
-    yB_cdf = distB.cdf(x)
-    yBeta_pdf = stat.beta.pdf(x, 2, 4)
+    xB = np.linspace(0, 1, 200)
+    yB_pdf = distB.pdf(normalized=True)
+    yB_cdf = distB.cdf()
+    yBeta_pdf = stat.beta.pdf(xB, 2, 4)
     yBeta_pdf = yBeta_pdf / np.sum(yBeta_pdf)
-    yBeta_cdf = stat.beta.cdf(x, 2, 4)
+    yBeta_cdf = stat.beta.cdf(xB, 2, 4)
 
     xlowSB = stat.weibull_max.ppf(0.1, 2, 5)
     x50SB = stat.weibull_max.ppf(0.5, 2, 5)
     xhighSB = stat.weibull_max.ppf(0.9, 2, 5)
-    lowerSB = 0
-    alphaSB = 0.1
+   
+    distSB = JQPDSemiBounded(xlowSB, x50SB, xhighSB)
 
-    distSB = JQPDSemiBounded(xlowSB, x50SB, xhighSB, alpha=alphaSB, lower=lowerSB)
-
-    x2 = np.logspace(0, 1, 200)
-    #x2 = np.linspace(1, 10, 200)
-    ySB_pdf = distSB.pdf(x2, normalized=True)
-    ySB_cdf = distSB.cdf(x2)
-    yW_pdf = stat.weibull_max.pdf(x2, 2, 5)
+    xSB = np.logspace(0, 1, 200)
+    ySB_pdf = distSB.pdf(xSB, normalized=True)
+    ySB_cdf = distSB.cdf(xSB)
+    yW_pdf = stat.weibull_max.pdf(xSB, 2, 5)
     yW_pdf = yW_pdf / np.sum(yW_pdf)
-    yW_cdf = stat.weibull_max.cdf(x2, 2, 5)
+    yW_cdf = stat.weibull_max.cdf(xSB, 2, 5)
 
     fig, (axB, axSB) = plt.subplots(2,2)
-    axB[0].plot(x, yB_pdf, x, yBeta_pdf, '--')
-    axB[1].plot(x, yB_cdf, x, yBeta_cdf, '--')
-    axSB[0].plot(x2, ySB_pdf, x2, yW_pdf, '--')
-    axSB[1].plot(x2, ySB_cdf, x2, yW_cdf, '--')
+    axB[0].plot(xB, yB_pdf, xB, yBeta_pdf, '--')
+    axB[1].plot(xB, yB_cdf, xB, yBeta_cdf, '--')
+    axSB[0].plot(xSB, ySB_pdf, xSB, yW_pdf, '--')
+    axSB[1].plot(xSB, ySB_cdf, xSB, yW_cdf, '--')
     axB[0].sharex(axB[1])
     axSB[0].sharex(axSB[1])
 
