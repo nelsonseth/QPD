@@ -53,7 +53,7 @@ import scipy.stats as stat
 from numpy.typing import ArrayLike
 
 _default_size = 200
-_default_wiggle = 10**-10
+
 
 # Normal unit functions used to build below calculations.
 # Unit normal cdf.
@@ -216,7 +216,8 @@ class _QPD(ABC):
         ----------
         ``x``: array_like, float, Optional
             Quantiles for the given range. If not specified, cdf is computed for number
-            of quantiles specified in ``size`` across the bounds range.
+            of quantiles specified in ``size`` across the bounds range. Note: ``x`` inputs
+            outside of bounds will result in a ``nan`` result.
 
         ``size``: int, Optional
             Size of array to be calculated. If ``x`` is specified, size is ignored.
@@ -454,27 +455,24 @@ class JQPDBounded(_QPD):
         lower, upper = self._base.bounds
 
         _x = np.asarray(x)
-
         if _x.size == 0: # no x input given
             # create array with length 'size' exclusive to lower and upper by wiggle.
-            _x = np.linspace(lower + _default_wiggle, upper - _default_wiggle, size)
-        else:
-            # Handling divide by 0 and log(0) occurrences.
-            # If 'x' is equal to either the upper or lower bound, we get an instance
-            # of log(0), which numpy gives a divide by zero error for.
-            # To address this, we add a small amount to the value of x in that case.
-            _x = np.where((_x == lower), _x + _default_wiggle, _x)
-            _x = np.where((_x == upper), _x - _default_wiggle, _x)
-            
+            _x = np.linspace(lower, upper, size)
+
         # Unpackage internal args from tuple.
         c, lf, mf, hf, n, xi, delta, lam = self._get_calc_args()
 
-        if n == 0: # special exception when n = 0 -> delta = 0
-            out = _ncdf((2*c/(hf - lf)) * (_nppf((_x - lower)/(upper - lower)) - mf))
-        else:
-            out = (_ncdf((1/delta) * arcsinh((1/lam) 
-                * (_nppf((_x - lower) / (upper - lower)) - xi)) - n*c))
-        return out
+        # Suppress numpy divide by zero errors when x == lower or x == upper.
+        # Those instances will result in a nan value within the array. I wanted
+        # to maintain the size of the original array so that it plays nice with 
+        # plotting and other size dependent checks.
+        with np.errstate(divide='ignore', invalid='ignore'):
+            if n == 0: # special exception when n = 0 -> delta = 0
+                out = _ncdf((2*c/(hf - lf)) * (_nppf((_x - lower)/(upper - lower)) - mf))
+            else:
+                out = (_ncdf((1/delta) * arcsinh((1/lam) 
+                    * (_nppf((_x - lower) / (upper - lower)) - xi)) - n*c))
+            return out
 
 
     def pdf(self,
@@ -490,40 +488,40 @@ class JQPDBounded(_QPD):
         _x = np.asarray(x)
 
         if _x.size == 0: # no x input given
-            # create array with length 'size' exclusive to lower and upper.
-            _x = np.linspace(lower + _default_wiggle, upper - _default_wiggle, size)
-        else:
-            # Handling divide by 0 and log(0) occurrences.
-            # If 'x' is equal to either the upper or lower bound, we get an instance
-            # of log(0), which numpy gives a divide by zero error for.
-            # To address this, we add a small amount to the value of x in that case.
-            _x = np.where((_x == lower), _x + _default_wiggle, _x)
-            _x = np.where((_x == upper), _x - _default_wiggle, _x)
-    
+            # create array with length 'size'
+            _x = np.linspace(lower, upper, size)
+   
         # Unpackage internal args from tuple.
         c, lf, mf, hf, n, xi, delta, lam = self._get_calc_args()
 
-        # first two parts of chain rule
-        part1 = 1 / (upper - lower)
-        part2 = 1 / (_npdf(_nppf((_x - lower)/(upper - lower))))
+        # Suppress numpy divide by zero errors when x == lower or x == upper.
+        # Those instances will result in a nan value within the array. I wanted
+        # to maintain the size of the original array so that it plays nice with 
+        # plotting and other size dependent checks.
+        with np.errstate(divide='ignore', invalid='ignore'):
+            # first two parts of chain rule
+            part1 = 1 / (upper - lower)
+            
+            part2 = 1 / (_npdf(_nppf((_x - lower)/(upper - lower))))
 
-        # 3rd and 4th parts of chain rule
-        if n == 0: # special exception when n = 0, delta = 0
-            part3 = 2*c / (hf - lf) * _nppf((_x - lower)/(upper - lower))
-            part4 = _npdf((2*c/(hf - lf))*(_nppf((_x - lower)/(upper - lower)) - mf))
+            # 3rd and 4th parts of chain rule
+            if n == 0: # special exception when n = 0, delta = 0
+                part3 = 2*c / (hf - lf) * _nppf((_x - lower)/(upper - lower))
+                part4 = _npdf((2*c/(hf - lf))*(_nppf((_x - lower)/(upper - lower)) - mf))
 
-        else:
-            part3 = (1 / (delta * sqrt((_nppf((_x - lower)/(upper - lower))
-                - xi)**2 + lam**2)))
-            part4 = (_npdf((1/delta) * arcsinh((1/lam)
-                * (_nppf((_x - lower) / (upper - lower)) - xi)) - n*c))
+            else:
+                part3 = (1 / (delta * sqrt((_nppf((_x - lower)/(upper - lower))
+                    - xi)**2 + lam**2)))
+                part4 = (_npdf((1/delta) * arcsinh((1/lam)
+                    * (_nppf((_x - lower) / (upper - lower)) - xi)) - n*c))
 
-        # return combined derivative
-        pdf_out = np.asarray(part1*part2*part3*part4)
-        if normalized: #normalize pdf
-            pdf_out = pdf_out / pdf_out.sum()
+            # return combined derivative
+            pdf_out = np.asarray(part1*part2*part3*part4)
+            
+            if normalized: #normalize pdf
+                pdf_out = pdf_out / pdf_out.sum()
 
-        return pdf_out
+            return pdf_out
 
 
 class JQPDSemiBounded(_QPD):
@@ -699,30 +697,29 @@ class JQPDSemiBounded(_QPD):
         if _x.size == 0: # no x input given
             # create upper limit of twice ppf(0.999)
             upper = self.ppf(0.999) * 2
-            # create array with length 'size' exclusive to lower.
-            _x = np.linspace(lower, upper, size+1)[1:]
-        else:
-            # Handling divide by 0 and log(0) occurrences.
-            # If 'x' is equal to lower bound, we get an instance
-            # of log(0), which numpy gives a divide by zero error for.
-            # To address this, we add a small amount to the value of x in that case.
-            _x = np.where((_x == lower), _x + _default_wiggle, _x)
+            # create array with length 'size'
+            _x = np.linspace(lower, upper, size)
 
         # Unpackage internal args from tuple.
         c, n, theta, delta, lam, s1 = self._get_calc_args()
             
         x50 = self._base.x[1]
     
-        s3 = log((_x - lower)/x50)
-        s4 = log((_x - lower)/theta)
+        # Suppress numpy divide by zero errors when x == lower.
+        # Those instances will result in a nan value within the array. I wanted
+        # to maintain the size of the original array so that it plays nice with 
+        # plotting and other size dependent checks.
+        with np.errstate(divide='ignore', invalid='ignore'):
+            s3 = log((_x - lower)/x50)
+            s4 = log((_x - lower)/theta)
 
-        if n == 0: # special exception when n = 0, delta = 0
-            out = _ncdf((-c / log(s1)) * s3)
-        else:
-            out = (_ncdf((1/(lam*delta)) * (s4*sqrt((n*c*delta)**2 + 1)
-                - (n*c*delta)*sqrt(s4**2 + lam**2))))
+            if n == 0: # special exception when n = 0, delta = 0
+                out = _ncdf((-c / log(s1)) * s3)
+            else:
+                out = (_ncdf((1/(lam*delta)) * (s4*sqrt((n*c*delta)**2 + 1)
+                    - (n*c*delta)*sqrt(s4**2 + lam**2))))
 
-        return out
+            return out
 
 
     def pdf(self,
@@ -740,40 +737,40 @@ class JQPDSemiBounded(_QPD):
         if _x.size == 0:
             # create upper limit of twice ppf(0.999)
             upper = self.ppf(0.999) * 2
-            # create array with length 'size' exclusive to lower.
-            _x = np.linspace(lower, upper, size+1)[1:]
-        else:
-            # Handling divide by 0 and log(0) occurrences.
-            # If 'x' is equal to lower bound, we get an instance
-            # of log(0), which numpy gives a divide by zero error for.
-            # To address this, we add a small amount to the value of x in that case.
-            _x = np.where((_x == lower), _x + _default_wiggle, _x)
+            # create array with length 'size' 
+            _x = np.linspace(lower, upper, size)
 
         # Unpackage internal args from tuple.
         c, n, theta, delta, lam, s1 = self._get_calc_args()
             
         x50 = self._base.x[1]
         
-        s3 = log((_x - lower)/x50)
-        s4 = log((_x - lower)/theta)
+        # Suppress numpy divide by zero errors when x == lower.
+        # Those instances will result in a nan value within the array. I wanted
+        # to maintain the size of the original array so that it plays nice with 
+        # plotting and other size dependent checks.
+        with np.errstate(divide='ignore', invalid='ignore'):
+            s3 = log((_x - lower)/x50)
+            s4 = log((_x - lower)/theta)
 
-        if n == 0: # special exception when n = 0, delta = 0
-            out = _npdf((-c / log(s1)) * s3)
-        else:
-            part1 = ((1/((lam*delta)*(_x - lower))) * (sqrt((n*c*delta)**2 + 1)
-                - n*c*delta*s4 / sqrt((s4)**2 + lam**2)))
+            if n == 0: # special exception when n = 0, delta = 0
+                out = _npdf((-c / log(s1)) * s3)
+            else:
+                part1 = ((1/((lam*delta)*(_x - lower))) * (sqrt((n*c*delta)**2 + 1)
+                    - n*c*delta*s4 / sqrt((s4)**2 + lam**2)))
 
-            part2 = (_npdf((1/(lam*delta)) * (s4*sqrt((n*c*delta)**2 + 1)
-                - (n*c*delta)*sqrt(s4**2 + lam**2))))
+                part2 = (_npdf((1/(lam*delta)) * (s4*sqrt((n*c*delta)**2 + 1)
+                    - (n*c*delta)*sqrt(s4**2 + lam**2))))
 
-            out = part1*part2
+                out = part1*part2
 
-        pdf_out = np.asarray(out)
+            pdf_out = np.asarray(out)
 
-        if normalized == True:
-            pdf_out = pdf_out / pdf_out.sum()
+            if normalized == True:
+                pdf_out = pdf_out / pdf_out.sum()
 
-        return pdf_out
+            return pdf_out
+
 
     def _pdf2(self,
         x: Union[ArrayLike, float] = [],
@@ -790,41 +787,41 @@ class JQPDSemiBounded(_QPD):
         if _x.size == 0:
             # create upper limit of twice ppf(0.999)
             upper = self.ppf(0.999) * 2
-            # create array with length 'size' exclusive to lower.
-            _x = np.linspace(lower, upper, size+1)[1:]
-        else:
-            # Handling divide by 0 and log(0) occurrences.
-            # If 'x' is equal to lower bound, we get an instance
-            # of log(0), which numpy gives a divide by zero error for.
-            # To address this, we add a small amount to the value of x in that case.
-            _x = np.where((_x == lower), _x + _default_wiggle, _x)
+            # create array with length 'size'.
+            _x = np.linspace(lower, upper, size)
 
         # Unpackage internal args from tuple.
         c, n, theta, delta, lam, s1 = self._get_calc_args()
             
         x50 = self._base.x[1]
-        s3 = log((_x - lower)/x50)
-        s4 = log((_x - lower)/theta)
 
-        if n == 0: # special exception when n = 0, delta = 0
-            part1 = 1/x50
-            part2 = -c/log(s1) * x50/(_x-lower)
-            part3 = _npdf(((-c / log(s1)) * s3))
-            out = part1*part2*part3
-        else:
-            part1 = 1/theta
-            part2 = theta / (lam * (_x - lower))
-            part3 = 1 / sqrt(1/lam**2 * s4**2 + 1)
-            part4 = 1/delta * cosh(arcsinh(1/lam*s4) - arcsinh(n*c*delta))
-            part5 = _npdf(1/delta*sinh(arcsinh(1/lam*s4)-arcsinh(n*c*delta)))
-            out = part1*part2*part3*part4*part5  
+        # Suppress numpy divide by zero errors when x == lower or x == upper.
+        # Those instances will result in a nan value within the array. I wanted
+        # to maintain the size of the original array so that it plays nice with 
+        # plotting and other size dependent checks.
+        with np.errstate(divide='ignore', invalid='ignore'):
+            s3 = log((_x - lower)/x50)
+            s4 = log((_x - lower)/theta)
 
-        pdf_out = np.asarray(out)
+            if n == 0: # special exception when n = 0, delta = 0
+                part1 = 1/x50
+                part2 = -c/log(s1) * x50/(_x-lower)
+                part3 = _npdf(((-c / log(s1)) * s3))
+                out = part1*part2*part3
+            else:
+                part1 = 1/theta
+                part2 = theta / (lam * (_x - lower))
+                part3 = 1 / sqrt(1/lam**2 * s4**2 + 1)
+                part4 = 1/delta * cosh(arcsinh(1/lam*s4) - arcsinh(n*c*delta))
+                part5 = _npdf(1/delta*sinh(arcsinh(1/lam*s4)-arcsinh(n*c*delta)))
+                out = part1*part2*part3*part4*part5  
 
-        if normalized == True:
-            pdf_out = pdf_out / pdf_out.sum()
+            pdf_out = np.asarray(out)
 
-        return pdf_out
+            if normalized == True:
+                pdf_out = pdf_out / pdf_out.sum()
+
+            return pdf_out
 
 #-------------------------------------------------------------------------------
 
