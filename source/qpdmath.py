@@ -46,6 +46,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Union
 from builtins import Exception
+from inspect import cleandoc
 
 import numpy as np
 from numpy import sqrt, exp, log, arccosh, sinh, arcsinh, sign, cosh
@@ -102,7 +103,7 @@ class _BaseInputs:
     '''
     x: list[float]
     q: list[float]
-    bounds: list[float, None]
+    bounds: list[float]
 
     # auto check inputs after first initialization.
     # active instances will need to call check_args() if needed.
@@ -152,9 +153,8 @@ class _BaseInputs:
             raise InputError('Lower bound must be less than all x.')
         
         # upper bound could be None
-        if _bounds[1]:
-            if _bounds[1] <= _x[-1]:
-                raise InputError('Upper bound must be greater than all x.')
+        if _bounds[1] <= _x[-1]:
+            raise InputError('Upper bound must be greater than all x.')
 
         return True
     
@@ -214,10 +214,9 @@ class _QPD(ABC):
     
         Parameters
         ----------
-        ``x``: array_like, float, Optional
+        ``x``: array_like, Optional
             Quantiles for the given range. If not specified, cdf is computed for number
-            of quantiles specified in ``size`` across the bounds range. Note: ``x`` inputs
-            outside of bounds will result in a ``nan`` result.
+            of quantiles specified in ``size`` across the bounds range.
 
         ``size``: int, Optional
             Size of array to be calculated. If ``x`` is specified, size is ignored.
@@ -225,7 +224,7 @@ class _QPD(ABC):
         
         Returns
         -------
-        cdf : array_like, float
+        cdf : array_like
             Cumulative density function evaluated at ``x``.
         '''
         pass
@@ -237,7 +236,7 @@ class _QPD(ABC):
     
         Parameters
         ----------
-        ``x``: array_like, float, Optional
+        ``x``: array_like, Optional
             Quantiles for the given range. If not specified, pdf is computed for number
             of quantiles specified in ``size`` across the bounds range.
 
@@ -251,7 +250,7 @@ class _QPD(ABC):
 
         Returns
         -------
-        pdf : array_like, float
+        pdf : array_like
             Probability density function evaluated at ``x``.
         '''
         pass
@@ -265,7 +264,7 @@ class _QPD(ABC):
         Parameters
         ----------
         ``q``: array_like, float
-            Lower tail probability. Must be in the range 0 to 1.
+            Lower tail probability. Must be in the range [0, 1].
         
         Returns
         -------
@@ -276,18 +275,15 @@ class _QPD(ABC):
 
     def __repr__(self):
         
-        msg = f'''
-        QPD Instance with basis:
+        msg =f'''QPD Instance with basis:
+          Quantile | Probability
+          ---------+------------
+             {self._base.x[0]:.2f}  |  {self._base.q[0]:.2f}
+             {self._base.x[1]:.2f}  |  {self._base.q[1]:.2f}
+             {self._base.x[2]:.2f}  |  {self._base.q[2]:.2f}
+          Bounds: {self._base.bounds[0]:.2f} to {self._base.bounds[1]:.2f}'''
 
-        Quantile  Probability
-            {self._base.x[0]},      {self._base.q[0]}
-            {self._base.x[1]},      {self._base.q[1]}
-            {self._base.x[2]},      {self._base.q[2]}
-
-        Bounds: {self._base.bounds[0]} to {self._base.bounds[1]}
-        '''
-
-        return msg
+        return cleandoc(msg)
 
 class JQPDBounded(_QPD):
     '''Johnson QPD - Bounded Class
@@ -472,6 +468,10 @@ class JQPDBounded(_QPD):
             else:
                 out = (_ncdf((1/delta) * arcsinh((1/lam) 
                     * (_nppf((_x - lower) / (upper - lower)) - xi)) - n*c))
+            
+            out[_x > upper] = 1
+            out[_x < lower] = 0
+            
             return out
 
 
@@ -516,7 +516,8 @@ class JQPDBounded(_QPD):
                     * (_nppf((_x - lower) / (upper - lower)) - xi)) - n*c))
 
             # return combined derivative
-            pdf_out = np.asarray(part1*part2*part3*part4)
+            out = part1*part2*part3*part4
+            pdf_out = np.nan_to_num(out)
             
             if normalized: #normalize pdf
                 pdf_out = pdf_out / pdf_out.sum()
@@ -586,7 +587,7 @@ class JQPDSemiBounded(_QPD):
         super().__init__(
             [xlow, x50, xhigh],
             [alpha, 0.5, 1-alpha],
-            [lower, None])
+            [lower, np.inf])
 
         self._alpha = alpha
 
@@ -680,7 +681,7 @@ class JQPDSemiBounded(_QPD):
             out = (lower + theta*exp(lam*sinh(arcsinh(delta*_nppf(_q))
                 + arcsinh(n*c*delta))))
 
-        return out
+        return np.nan_to_num(out)
 
 
     def cdf(self,
@@ -719,7 +720,7 @@ class JQPDSemiBounded(_QPD):
                 out = (_ncdf((1/(lam*delta)) * (s4*sqrt((n*c*delta)**2 + 1)
                     - (n*c*delta)*sqrt(s4**2 + lam**2))))
 
-            return out
+            return np.nan_to_num(out)
 
 
     def pdf(self,
@@ -764,7 +765,7 @@ class JQPDSemiBounded(_QPD):
 
                 out = part1*part2
 
-            pdf_out = np.asarray(out)
+            pdf_out = np.nan_to_num(out)
 
             if normalized == True:
                 pdf_out = pdf_out / pdf_out.sum()
@@ -816,7 +817,7 @@ class JQPDSemiBounded(_QPD):
                 part5 = _npdf(1/delta*sinh(arcsinh(1/lam*s4)-arcsinh(n*c*delta)))
                 out = part1*part2*part3*part4*part5  
 
-            pdf_out = np.asarray(out)
+            pdf_out = np.nan_to_num(out)
 
             if normalized == True:
                 pdf_out = pdf_out / pdf_out.sum()
@@ -836,8 +837,8 @@ if __name__ == '__main__':
     distB = JQPDBounded(xlowB, x50B, xhighB)
 
     xB = np.linspace(0, 1, 200)
-    yB_pdf = distB.pdf(normalized=True)
-    yB_cdf = distB.cdf()
+    yB_pdf = distB.pdf(xB, normalized=True)
+    yB_cdf = distB.cdf(xB)
     yBeta_pdf = stat.beta.pdf(xB, 2, 4)
     yBeta_pdf = yBeta_pdf / np.sum(yBeta_pdf)
     yBeta_cdf = stat.beta.cdf(xB, 2, 4)
